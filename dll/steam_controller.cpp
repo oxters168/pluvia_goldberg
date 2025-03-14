@@ -16,31 +16,57 @@
    <http://www.gnu.org/licenses/>.  */
 
 #include "dll/steam_controller.h"
+#include "common_helpers/logger.h"
 
 #define JOY_ID_START 10
 #define STICK_DPAD 3
 #define DEADZONE_BUTTON_STICK 0.3
 
 
-
 #if !defined(CONTROLLER_SUPPORT)
 
-inline void GamepadInit(void) {}
-inline void GamepadShutdown(void) {}
-inline void GamepadUpdate(void) {}
-inline GAMEPAD_BOOL GamepadIsConnected(GAMEPAD_DEVICE device) { return GAMEPAD_FALSE; }
-inline GAMEPAD_BOOL GamepadButtonDown(GAMEPAD_DEVICE device, GAMEPAD_BUTTON button) { return GAMEPAD_FALSE; }
-inline float GamepadTriggerLength(GAMEPAD_DEVICE device, GAMEPAD_TRIGGER trigger) { return 0.0; }
-inline GAMEPAD_STICKDIR GamepadStickDir(GAMEPAD_DEVICE device, GAMEPAD_STICK stick) { return STICKDIR_CENTER; }
-inline void GamepadStickNormXY(GAMEPAD_DEVICE device, GAMEPAD_STICK stick, float* outX, float* outY) {}
-inline float GamepadStickLength(GAMEPAD_DEVICE device, GAMEPAD_STICK stick) { return 0.0; }
-inline void GamepadSetRumble(GAMEPAD_DEVICE device, float left, float right,  unsigned int rumble_length_ms) {}
+inline void GamepadInit(void) {
+    LogMessage("GamepadInit");
+}
+inline void GamepadShutdown(void) {
+    LogMessage("GamepadShutdown");
+}
+inline void GamepadUpdate(void) {
+    LogMessage("GamepadUpdate");
+}
+inline GAMEPAD_BOOL GamepadIsConnected(GAMEPAD_DEVICE device) {
+    LogMessage("GamepadIsConnected(%u)", device);
+    return GAMEPAD_FALSE;
+}
+inline GAMEPAD_BOOL GamepadButtonDown(GAMEPAD_DEVICE device, GAMEPAD_BUTTON button) {
+    LogMessage("GamepadButtonDown(%u, %u)", device, button);
+    return GAMEPAD_FALSE;
+}
+inline float GamepadTriggerLength(GAMEPAD_DEVICE device, GAMEPAD_TRIGGER trigger) {
+    LogMessage("GamepadTriggerLength(%u, %u)", device, trigger);
+    return 0.0;
+}
+inline GAMEPAD_STICKDIR GamepadStickDir(GAMEPAD_DEVICE device, GAMEPAD_STICK stick) {
+    LogMessage("GamepadStickDir(%u, %u)", device, stick);
+    return STICKDIR_CENTER;
+}
+inline void GamepadStickNormXY(GAMEPAD_DEVICE device, GAMEPAD_STICK stick, float* outX, float* outY) {
+    LogMessage("GamepadStickNormXY(%u, %u)", device, stick);
+}
+inline float GamepadStickLength(GAMEPAD_DEVICE device, GAMEPAD_STICK stick) {
+    LogMessage("GamepadStickLength(%u, %u)", device, stick);
+    return 0.0;
+}
+inline void GamepadSetRumble(GAMEPAD_DEVICE device, float left, float right,  unsigned int rumble_length_ms) {
+    LogMessage("GamepadSetRumble(%u, %f, %f, %u)", device, left, right, rumble_length_ms);
+}
 
 #endif
 
 
 
 Controller_Action::Controller_Action(ControllerHandle_t controller_handle) {
+    LogMessage("Controller_Action(%llu)", controller_handle);
     this->controller_handle = controller_handle;
 }
 

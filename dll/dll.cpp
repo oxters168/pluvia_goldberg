@@ -19,6 +19,10 @@
 #include "dll/dll.h"
 #include "dll/settings_parser.h"
 #include "dll/client_known_interfaces.h"
+#include "common_helpers/logger.h"
+#include "common_helpers/tcp_socket_client.h"
+
+static TCPSocketClient* tcp_socket_client = nullptr;
 
 
 static char old_client[128] = STEAMCLIENT_INTERFACE_VERSION; //"SteamClient017";
@@ -76,7 +80,6 @@ static ISteamInventory *old_gamserver_inventory_instance{};
 static ISteamUGC *old_gamserver_ugc_instance{};
 static ISteamApps *old_gamserver_apps_instance{};
 static ISteamMasterServerUpdater *old_gamserver_masterupdater_instance{};
-
 
 
 static void load_old_steam_interfaces()
@@ -157,6 +160,7 @@ static void load_old_steam_interfaces()
 //steam_api_internal.h
 STEAMAPI_API HSteamUser SteamAPI_GetHSteamUser()
 {
+    LogMessage("SteamAPI_GetHSteamUser");
     PRINT_DEBUG_ENTRY();
     if (!get_steam_client()->IsUserLogIn()) return 0;
     return CLIENT_HSTEAMUSER;
@@ -258,6 +262,7 @@ static void *create_client_interface(const char *ver)
 
 STEAMAPI_API void * S_CALLTYPE SteamInternal_CreateInterface( const char *ver )
 {
+    LogMessage("SteamInternal_CreateInterface(%s)", ver);
     PRINT_DEBUG("%s", ver);
     if (!get_steam_client()->IsUserLogIn() && !get_steam_client()->IsServerInit()) return NULL;
 
@@ -273,6 +278,7 @@ struct ContextInitData {
 
 STEAMAPI_API void * S_CALLTYPE SteamInternal_ContextInit( void *pContextInitData )
 {
+    LogMessage("SteamInternal_ContextInit");
     //PRINT_DEBUG_ENTRY();
     struct ContextInitData *contextInitData = (struct ContextInitData *)pContextInitData;
     if (contextInitData->counter != global_counter) {
@@ -297,6 +303,7 @@ STEAMAPI_API void * S_CALLTYPE SteamInternal_ContextInit( void *pContextInitData
 //       FatalError( "Failed to init Steam.  %s", errMsg );
 STEAMAPI_API ESteamAPIInitResult S_CALLTYPE SteamInternal_SteamAPI_Init( const char *pszInternalCheckInterfaceVersions, SteamErrMsg *pOutErrMsg )
 {
+    LogMessage("SteamInternal_SteamAPI_Init(%s)", pszInternalCheckInterfaceVersions);
     PRINT_DEBUG("%s", pszInternalCheckInterfaceVersions);
     if (SteamAPI_Init()) {
         return ESteamAPIInitResult::k_ESteamAPIInitResult_OK;
@@ -311,6 +318,7 @@ STEAMAPI_API ESteamAPIInitResult S_CALLTYPE SteamInternal_SteamAPI_Init( const c
 
 STEAMAPI_API ESteamAPIInitResult S_CALLTYPE SteamAPI_InitFlat( SteamErrMsg *pOutErrMsg )
 {
+    LogMessage("SteamAPI_InitFlat");
     PRINT_DEBUG_ENTRY();
     if (SteamAPI_Init()) {
         return ESteamAPIInitResult::k_ESteamAPIInitResult_OK;
@@ -341,12 +349,29 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_Init()
     user_steam_pipe = client->CreateSteamPipe();
     client->ConnectToGlobalUser(user_steam_pipe);
     global_counter++;
-    return true;
+    //return true;
+
+    LogMessage("SteamAPI_Init");
+    if (!tcp_socket_client) {
+        tcp_socket_client = new TCPSocketClient();
+    }
+
+    if (tcp_socket_client && tcp_socket_client->isInitialized()) {
+        uint32_t result = 0;
+        if (tcp_socket_client->sendMessage(MSG_INIT) && tcp_socket_client->receiveResponse(&result)) {
+            LogMessage("Init response received");
+            return result != 0;
+        }
+        LogMessage("Init failed");
+    }
+    return false;
+
 }
 
 //TODO: not sure if this is the right signature for this function.
 STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_InitAnonymousUser()
 {
+    LogMessage("SteamAPI_InitAnonymousUser");
     PRINT_DEBUG_ENTRY();
     return SteamAPI_Init();
 }
@@ -355,6 +380,14 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_InitAnonymousUser()
 STEAMAPI_API void S_CALLTYPE SteamAPI_Shutdown()
 {
     PRINT_DEBUG_ENTRY();
+
+    LogMessage("SteamAPI_Shutdown");
+    if (tcp_socket_client) {
+        tcp_socket_client->sendMessage(MSG_SHUTDOWN);
+        delete tcp_socket_client;
+        tcp_socket_client = nullptr;
+    }
+
     
     // if nothing is initialized just return, see the note in SteamGameServer_Shutdown()
     // guard against sloppy games programming
@@ -438,6 +471,16 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_RestartAppIfNecessary( uint32 unOwnA
     crack_SteamAPI_RestartAppIfNecessary(unOwnAppID);
 #endif
     client->setAppID(unOwnAppID);
+    //return false;
+
+    LogMessage("SteamAPI_RestartAppIfNecessary(%u)", unOwnAppID);
+    if (tcp_socket_client && tcp_socket_client->isInitialized()) {
+        bool result = false;
+        if (tcp_socket_client->sendMessage(MSG_RESTART_APP, &unOwnAppID, sizeof(unOwnAppID)) &&
+            tcp_socket_client->receiveResponse(&result)) {
+            return result;
+        }
+    }
     return false;
 }
 
@@ -447,18 +490,21 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_RestartAppIfNecessary( uint32 unOwnA
 // program never needs to explicitly call this function.
 STEAMAPI_API void S_CALLTYPE SteamAPI_ReleaseCurrentThreadMemory()
 {
+    LogMessage("SteamAPI_ReleaseCurrentThreadMemory");
     PRINT_DEBUG_TODO();
 }
 
 // crash dump recording functions
 STEAMAPI_API void S_CALLTYPE SteamAPI_WriteMiniDump( uint32 uStructuredExceptionCode, void* pvExceptionInfo, uint32 uBuildID )
 {
+    LogMessage("SteamAPI_WriteMiniDump");
     PRINT_DEBUG_TODO();
     PRINT_DEBUG("  app is writing a crash dump! [XXXXXXXXXXXXXXXXXXXXXXXXXXX]");
 }
 
 STEAMAPI_API void S_CALLTYPE SteamAPI_SetMiniDumpComment( const char *pchMsg )
 {
+    LogMessage("SteamAPI_SetMiniDumpComment(%s)", pchMsg);
     PRINT_DEBUG_TODO();
     PRINT_DEBUG(  "%s", pchMsg);
 }
@@ -491,6 +537,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_SetMiniDumpComment( const char *pchMsg )
 // and call SteamAPI_ReleaseCurrentThreadMemory regularly on other threads.
 STEAMAPI_API void S_CALLTYPE SteamAPI_RunCallbacks()
 {
+    LogMessage("SteamAPI_RunCallbacks");
     // PRINT_DEBUG_ENTRY();
     get_steam_client()->RunCallbacks(true, false);
     //std::this_thread::sleep_for(std::chrono::microseconds(1)); //fixes resident evil revelations lagging. (Seems to work fine without this right now, commenting out)
@@ -513,6 +560,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_RunCallbacks()
 // Internal functions used by the utility CCallback objects to receive callbacks
 STEAMAPI_API void S_CALLTYPE SteamAPI_RegisterCallback( class CCallbackBase *pCallback, int iCallback )
 {
+    LogMessage("SteamAPI_RegisterCallback(%p, %u) funct: %u", pCallback, iCallback, pCallback->GetICallback());
     PRINT_DEBUG("%p %u funct:%u", pCallback, iCallback, pCallback->GetICallback());
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     get_steam_client()->RegisterCallback(pCallback, iCallback);
@@ -520,6 +568,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_RegisterCallback( class CCallbackBase *pCa
 
 STEAMAPI_API void S_CALLTYPE SteamAPI_UnregisterCallback( class CCallbackBase *pCallback )
 {
+    LogMessage("SteamAPI_UnregisterCallback(%p)", pCallback);
     PRINT_DEBUG("%p", pCallback);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (!steamclient_instance) return;
@@ -529,6 +578,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_UnregisterCallback( class CCallbackBase *p
 // Internal functions used by the utility CCallResult objects to receive async call results
 STEAMAPI_API void S_CALLTYPE SteamAPI_RegisterCallResult( class CCallbackBase *pCallback, SteamAPICall_t hAPICall )
 {
+    LogMessage("SteamAPI_RegisterCallResult(%p, %llu)", pCallback, hAPICall);
     PRINT_DEBUG("%llu %p", hAPICall, pCallback);
     if (!hAPICall)
         return;
@@ -538,6 +588,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_RegisterCallResult( class CCallbackBase *p
 
 STEAMAPI_API void S_CALLTYPE SteamAPI_UnregisterCallResult( class CCallbackBase *pCallback, SteamAPICall_t hAPICall )
 {
+    LogMessage("SteamAPI_UnregisterCallResult(%p, %llu)", pCallback, hAPICall);
     PRINT_DEBUG_ENTRY();
     if (!hAPICall)
         return;
@@ -548,12 +599,14 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_UnregisterCallResult( class CCallbackBase 
 
 STEAMAPI_API void *S_CALLTYPE SteamInternal_FindOrCreateUserInterface( HSteamUser hSteamUser, const char *pszVersion )
 {
+    LogMessage("SteamInternal_FindOrCreateUserInterface(%i, %s)", hSteamUser, pszVersion);
     PRINT_DEBUG("%i %s", hSteamUser, pszVersion);
     return get_steam_client()->GetISteamGenericInterface(hSteamUser, SteamAPI_GetHSteamPipe(), pszVersion);
 }
 
 STEAMAPI_API void *S_CALLTYPE SteamInternal_FindOrCreateGameServerInterface( HSteamUser hSteamUser, const char *pszVersion )
 {
+    LogMessage("SteamInternal_FindOrCreateGameServerInterface(%i, %s)", hSteamUser, pszVersion);
     PRINT_DEBUG("%i %s", hSteamUser, pszVersion);
     return get_steam_client()->GetISteamGenericInterface(hSteamUser, SteamGameServer_GetHSteamPipe(), pszVersion);
 }
@@ -568,7 +621,15 @@ STEAMAPI_API void *S_CALLTYPE SteamInternal_FindOrCreateGameServerInterface( HSt
 STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_IsSteamRunning()
 {
     PRINT_DEBUG_ENTRY();
-    return true;
+
+    LogMessage("SteamAPI_IsSteamRunning");
+    if (tcp_socket_client && tcp_socket_client->isInitialized()) {
+        bool result = false;
+        if (tcp_socket_client->sendMessage(MSG_IS_RUNNING) && tcp_socket_client->receiveResponse(&result)) {
+            return result;
+        }
+    }
+    return false;
 }
 
 // Pumps out all the steam messages, calling registered callbacks.
@@ -576,6 +637,8 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_IsSteamRunning()
 STEAMAPI_API void Steam_RunCallbacks( HSteamPipe hSteamPipe, bool bGameServerCallbacks )
 {
     // PRINT_DEBUG_ENTRY();
+
+    LogMessage("Steam_RunCallbacks(%i)", hSteamPipe);
 
     SteamAPI_RunCallbacks();
 
@@ -586,12 +649,14 @@ STEAMAPI_API void Steam_RunCallbacks( HSteamPipe hSteamPipe, bool bGameServerCal
 // register the callback funcs to use to interact with the steam dll
 STEAMAPI_API void Steam_RegisterInterfaceFuncs( void *hModule )
 {
+    LogMessage("Steam_RegisterInterfaceFuncs");
     PRINT_DEBUG_TODO();
 }
 
 // returns the HSteamUser of the last user to dispatch a callback
 STEAMAPI_API HSteamUser Steam_GetHSteamUserCurrent()
 {
+    LogMessage("Steam_GetHSteamUserCurrent");
     PRINT_DEBUG_ENTRY();
     //TODO
     return SteamAPI_GetHSteamUser();
@@ -612,12 +677,14 @@ STEAMAPI_API const char *SteamAPI_GetSteamInstallPath()
     steam_folder[count] = '\0';
 
     PRINT_DEBUG("returned path '%s'", steam_folder);
+    LogMessage("SteamAPI_GetSteamInstallPath -> '%s'", steam_folder);
     return steam_folder;
 }
 
 // returns the pipe we are communicating to Steam with
 STEAMAPI_API HSteamPipe SteamAPI_GetHSteamPipe()
 {
+    LogMessage("SteamAPI_GetHSteamPipe");
     PRINT_DEBUG_ENTRY();
     return user_steam_pipe;
 }
@@ -625,18 +692,21 @@ STEAMAPI_API HSteamPipe SteamAPI_GetHSteamPipe()
 // sets whether or not Steam_RunCallbacks() should do a try {} catch (...) {} around calls to issuing callbacks
 STEAMAPI_API void SteamAPI_SetTryCatchCallbacks( bool bTryCatchCallbacks )
 {
+    LogMessage("SteamAPI_SetTryCatchCallbacks");
     PRINT_DEBUG_TODO();
 }
 
 // backwards compat export, passes through to SteamAPI_ variants
 STEAMAPI_API HSteamPipe GetHSteamPipe()
 {
+    LogMessage("GetHSteamPipe");
     PRINT_DEBUG_ENTRY();
     return SteamAPI_GetHSteamPipe();
 }
 
 STEAMAPI_API HSteamUser GetHSteamUser()
 {
+    LogMessage("GetHSteamUser");
     PRINT_DEBUG_ENTRY();
     return SteamAPI_GetHSteamUser();
 }
@@ -645,12 +715,14 @@ STEAMAPI_API HSteamUser GetHSteamUser()
 // exists only for backwards compat with code written against older SDKs
 STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_InitSafe()
 {
+    LogMessage("SteamAPI_InitSafe");
     PRINT_DEBUG_ENTRY();
     return SteamAPI_Init();
 }
 
 STEAMAPI_API ISteamClient *SteamClient()
 {
+    LogMessage("SteamClient");
     PRINT_DEBUG("old");
     // call this first since it loads old interfaces
     Steam_Client* client = get_steam_client();
@@ -662,180 +734,210 @@ STEAMAPI_API ISteamClient *SteamClient()
 
 STEAMAPI_API ISteamUser *SteamUser()
 {
+    LogMessage("SteamUser");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_user_instance, get_steam_client_old()->GetISteamUser(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_user))
 }
 
 STEAMAPI_API ISteamFriends *SteamFriends()
 {
+    LogMessage("SteamFriends");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_friends_interface, get_steam_client_old()->GetISteamFriends(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_friends ))
 }
 
 STEAMAPI_API ISteamUtils *SteamUtils()
 {
+    LogMessage("SteamUtils");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_utils_interface, get_steam_client_old()->GetISteamUtils(SteamAPI_GetHSteamPipe(), old_utils))
 }
 
 STEAMAPI_API ISteamMatchmaking *SteamMatchmaking()
 {
+    LogMessage("SteamMatchmaking");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_matchmaking_instance, get_steam_client_old()->GetISteamMatchmaking(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_matchmaking))
 }
 
 STEAMAPI_API ISteamUserStats *SteamUserStats()
 {
+    LogMessage("SteamUserStats");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_userstats_instance, get_steam_client_old()->GetISteamUserStats(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_userstats))
 }
 
 STEAMAPI_API ISteamApps *SteamApps()
 {
+    LogMessage("SteamApps");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_apps_instance, get_steam_client_old()->GetISteamApps(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_apps))
 }
 
 STEAMAPI_API ISteamMatchmakingServers *SteamMatchmakingServers()
 {
+    LogMessage("SteamMatchmakingServers");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_matchmakingservers_instance, get_steam_client_old()->GetISteamMatchmakingServers(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_matchmaking_servers))
 }
 
 STEAMAPI_API ISteamNetworking *SteamNetworking()
 {
+    LogMessage("SteamNetworking");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_networking_instance, get_steam_client_old()->GetISteamNetworking(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_networking))
 }
 
 STEAMAPI_API ISteamRemoteStorage *SteamRemoteStorage()
 {
+    LogMessage("SteamRemoteStorage");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_remotestorage_instance, get_steam_client_old()->GetISteamRemoteStorage(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_remote_storage_interface))
 }
 
 STEAMAPI_API ISteamScreenshots *SteamScreenshots()
 {
+    LogMessage("SteamScreenshots");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_screenshots_instance, get_steam_client_old()->GetISteamScreenshots(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_screenshots))
 }
 
 STEAMAPI_API ISteamHTTP *SteamHTTP()
 {
+    LogMessage("SteamHTTP");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_http_instance, get_steam_client_old()->GetISteamHTTP(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_http))
 }
 
 STEAMAPI_API ISteamController *SteamController()
 {
+    LogMessage("SteamController");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_controller_instance, get_steam_client_old()->GetISteamController(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_controller))
 }
 
 STEAMAPI_API ISteamUGC *SteamUGC()
 {
+    LogMessage("SteamUGC");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_ugc_instance, get_steam_client_old()->GetISteamUGC(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_ugc_interface ))
 }
 
 STEAMAPI_API ISteamAppList *SteamAppList()
 {
+    LogMessage("SteamAppList");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_applist_instance, get_steam_client_old()->GetISteamAppList(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_applist))
 }
 
 STEAMAPI_API ISteamMusic *SteamMusic()
 {
+    LogMessage("SteamMusic");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_music_instance, get_steam_client_old()->GetISteamMusic(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_music))
 }
 
 STEAMAPI_API ISteamMusicRemote *SteamMusicRemote()
 {
+    LogMessage("SteamMusicRemote");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_musicremote_instance, get_steam_client_old()->GetISteamMusicRemote(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_music_remote))
 }
 
 STEAMAPI_API ISteamHTMLSurface *SteamHTMLSurface()
 {
+    LogMessage("SteamHTMLSurface");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_htmlsurface_instance, get_steam_client_old()->GetISteamHTMLSurface(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_html_surface))
 }
 
 STEAMAPI_API ISteamInventory *SteamInventory()
 {
+    LogMessage("SteamInventory");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_inventory_instance, get_steam_client_old()->GetISteamInventory(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_inventory))
 }
 
 STEAMAPI_API ISteamVideo *SteamVideo()
 {
+    LogMessage("SteamVideo");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_video_instance, get_steam_client_old()->GetISteamVideo(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_video))
 }
 
 STEAMAPI_API ISteamParentalSettings *SteamParentalSettings()
 {
+    LogMessage("SteamParentalSettings");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_parental_instance, get_steam_client_old()->GetISteamParentalSettings(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), ""))
 }
 
 STEAMAPI_API ISteamUnifiedMessages *SteamUnifiedMessages()
 {
+    LogMessage("SteamUnifiedMessages");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_unified_instance, get_steam_client_old()->GetISteamUnifiedMessages(SteamAPI_GetHSteamUser(), SteamAPI_GetHSteamPipe(), old_unified_messages))
 }
 
 STEAMAPI_API ISteamGameServer *SteamGameServer()
 {
+    LogMessage("SteamGameServer");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gameserver_instance, get_steam_clientserver_old()->GetISteamGameServer(SteamGameServer_GetHSteamUser(), SteamGameServer_GetHSteamPipe(), old_gameserver ))
 }
 
 STEAMAPI_API ISteamUtils *SteamGameServerUtils()
 {
+    LogMessage("SteamGameServerUtils");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gamserver_utils_instance, get_steam_clientserver_old()->GetISteamUtils(SteamGameServer_GetHSteamPipe(), old_utils ))
 }
 
 STEAMAPI_API ISteamNetworking *SteamGameServerNetworking()
 {
+    LogMessage("SteamGameServerNetworking");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gamserver_networking_instance, get_steam_clientserver_old()->GetISteamNetworking(SteamGameServer_GetHSteamUser(), SteamGameServer_GetHSteamPipe(), old_networking ))
 }
 
 STEAMAPI_API ISteamGameServerStats *SteamGameServerStats()
 {
+    LogMessage("SteamGameServerStats");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gamserver_stats_instance, get_steam_clientserver_old()->GetISteamGameServerStats(SteamGameServer_GetHSteamUser(), SteamGameServer_GetHSteamPipe(), old_gameserver_stats ))
 }
 
 STEAMAPI_API ISteamHTTP *SteamGameServerHTTP()
 {
+    LogMessage("SteamGameServerHTTP");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gamserver_http_instance, get_steam_clientserver_old()->GetISteamHTTP(SteamGameServer_GetHSteamUser(), SteamGameServer_GetHSteamPipe(), old_http ))
 }
 
 STEAMAPI_API ISteamInventory *SteamGameServerInventory()
 {
+    LogMessage("SteamGameServerInventory");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gamserver_inventory_instance, get_steam_clientserver_old()->GetISteamInventory(SteamGameServer_GetHSteamUser(), SteamGameServer_GetHSteamPipe(), old_inventory ))
 }
 
 STEAMAPI_API ISteamUGC *SteamGameServerUGC()
 {
+    LogMessage("SteamGameServerUGC");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gamserver_ugc_instance, get_steam_clientserver_old()->GetISteamUGC(SteamGameServer_GetHSteamUser(), SteamGameServer_GetHSteamPipe(), old_ugc_interface ))
 }
 
 STEAMAPI_API ISteamApps *SteamGameServerApps()
 {
+    LogMessage("SteamGameServerApps");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gamserver_apps_instance, get_steam_clientserver_old()->GetISteamApps(SteamGameServer_GetHSteamUser(), SteamGameServer_GetHSteamPipe(), old_apps ))
 }
 
 STEAMAPI_API ISteamMasterServerUpdater *SteamMasterServerUpdater()
 {
+    LogMessage("SteamMasterServerUpdater");
     PRINT_DEBUG("old");
     CACHE_OLDSTEAM_INSTANCE(old_gamserver_masterupdater_instance, get_steam_clientserver_old()->GetISteamMasterServerUpdater(SteamGameServer_GetHSteamUser(), SteamGameServer_GetHSteamPipe(), old_masterserver_updater))
 }
@@ -847,6 +949,7 @@ STEAMAPI_API ISteamMasterServerUpdater *SteamMasterServerUpdater()
 
 STEAMAPI_API void * S_CALLTYPE SteamGameServerInternal_CreateInterface( const char *ver )
 {
+    LogMessage("SteamGameServerInternal_CreateInterface(%s)", ver);
     PRINT_DEBUG("%s", ver);
     return SteamInternal_CreateInterface(ver);
 }
@@ -854,12 +957,14 @@ STEAMAPI_API void * S_CALLTYPE SteamGameServerInternal_CreateInterface( const ch
 static HSteamPipe server_steam_pipe = 0;
 STEAMAPI_API HSteamPipe S_CALLTYPE SteamGameServer_GetHSteamPipe()
 {
+    LogMessage("SteamGameServer_GetHSteamPipe");
     PRINT_DEBUG_ENTRY();
     return server_steam_pipe;
 }
 
 STEAMAPI_API HSteamUser S_CALLTYPE SteamGameServer_GetHSteamUser()
 {
+    LogMessage("SteamGameServer_GetHSteamUser");
     PRINT_DEBUG_ENTRY();
     if (!get_steam_client()->IsServerInit()) return 0;
     return SERVER_HSTEAMUSER;
@@ -869,6 +974,7 @@ STEAMAPI_API HSteamUser S_CALLTYPE SteamGameServer_GetHSteamUser()
 //STEAMAPI_API steam_bool S_CALLTYPE SteamGameServer_InitSafe(uint32 unIP, uint16 usSteamPort, uint16 usGamePort, uint16 usQueryPort, EServerMode eServerMode, const char *pchVersionString )
 STEAMAPI_API steam_bool S_CALLTYPE SteamGameServer_InitSafe( uint32 unIP, uint16 usSteamPort, uint16 usGamePort, uint16 unknown, EServerMode eServerMode, void *unknown1, void *unknown2, void *unknown3 )
 {
+    LogMessage("SteamGameServer_InitSafe");
     PRINT_DEBUG_ENTRY();
     const char *pchVersionString{};
     EServerMode serverMode{};
@@ -900,6 +1006,7 @@ STEAMAPI_API ISteamClient *SteamGameServerClient();
 
 STEAMAPI_API steam_bool S_CALLTYPE SteamInternal_GameServer_Init( uint32 unIP, uint16 usPort, uint16 usGamePort, uint16 usQueryPort, EServerMode eServerMode, const char *pchVersionString )
 {
+    LogMessage("SteamInternal_GameServer_Init(%X, %hu, %hu, %hu, %u, %s)", unIP, usPort, usGamePort, usQueryPort, eServerMode, pchVersionString);
     PRINT_DEBUG("%X %hu %hu %hu %u %s", unIP, usPort, usGamePort, usQueryPort, eServerMode, pchVersionString);
     // call this first since it loads old interfaces
     Steam_Client* client = get_steam_client();
@@ -917,6 +1024,7 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamInternal_GameServer_Init( uint32 unIP, u
 
 STEAMAPI_API ESteamAPIInitResult S_CALLTYPE SteamInternal_GameServer_Init_V2( uint32 unIP, uint16 usGamePort, uint16 usQueryPort, EServerMode eServerMode, const char *pchVersionString, const char *pszInternalCheckInterfaceVersions, SteamErrMsg *pOutErrMsg )
 {
+    LogMessage("SteamInternal_GameServer_Init(%u %hu %hu %u %s %s)", unIP, usGamePort, usQueryPort, eServerMode, pchVersionString, pszInternalCheckInterfaceVersions);
     PRINT_DEBUG("%u %hu %hu %u %s %s", unIP, usGamePort, usQueryPort, eServerMode, pchVersionString, pszInternalCheckInterfaceVersions);
     if (SteamInternal_GameServer_Init(unIP, 0, usGamePort, usQueryPort, eServerMode, pchVersionString)) {
         return ESteamAPIInitResult::k_ESteamAPIInitResult_OK;
@@ -939,6 +1047,7 @@ STEAMAPI_API ESteamAPIInitResult S_CALLTYPE SteamInternal_GameServer_Init_V2( ui
 //STEAMAPI_API steam_bool SteamGameServer_Init( uint32 unIP, uint16 usGamePort, uint16 usQueryPort, EServerMode eServerMode, const char *pchVersionString );
 STEAMAPI_API steam_bool SteamGameServer_Init( uint32 unIP, uint16 usSteamPort, uint16 usGamePort, uint16 unknown, EServerMode eServerMode, void *unknown1, void *unknown2, void *unknown3 )
 {
+    LogMessage("SteamGameServer_Init(%u %hu %hu %hu %u)", unIP, usSteamPort, usGamePort, unknown, eServerMode);
     PRINT_DEBUG_ENTRY();
     const char *pchVersionString{};
     EServerMode serverMode{};
@@ -968,6 +1077,7 @@ STEAMAPI_API steam_bool SteamGameServer_Init( uint32 unIP, uint16 usSteamPort, u
 
 STEAMAPI_API void SteamGameServer_Shutdown()
 {
+    LogMessage("SteamGameServer_Shutdown");
     PRINT_DEBUG_ENTRY();
 
     // appid 35140 despite being a regular game (not a server) will still call this function
@@ -1007,24 +1117,28 @@ STEAMAPI_API void SteamGameServer_Shutdown()
 
 STEAMAPI_API void SteamGameServer_RunCallbacks()
 {
+    LogMessage("SteamGameServer_RunCallbacks");
     // PRINT_DEBUG_ENTRY();
     get_steam_client()->RunCallbacks(false, true);
 }
 
 STEAMAPI_API steam_bool SteamGameServer_BSecure()
 {
+    LogMessage("SteamGameServer_BSecure");
     PRINT_DEBUG_ENTRY();
     return get_steam_client()->steam_gameserver->BSecure();
 }
 
 STEAMAPI_API uint64 SteamGameServer_GetSteamID()
 {
+    LogMessage("SteamGameServer_GetSteamID");
     PRINT_DEBUG_ENTRY();
     return get_steam_client()->steam_gameserver->GetSteamID().ConvertToUint64();
 }
 
 STEAMAPI_API ISteamClient *SteamGameServerClient()
 {
+    LogMessage("SteamGameServerClient");
     PRINT_DEBUG("old");
     if (!get_steam_clientserver_old()->IsServerInit()) return NULL;
     return reinterpret_cast<ISteamClient *>(SteamInternal_CreateInterface(old_client)); 
@@ -1032,17 +1146,20 @@ STEAMAPI_API ISteamClient *SteamGameServerClient()
 
 STEAMAPI_API uint32 SteamGameServer_GetIPCCallCount()
 {
+    LogMessage("SteamGameServer_GetIPCCallCount");
     return get_steam_client()->GetIPCCallCount();
 }
 
 
 STEAMAPI_API void S_CALLTYPE SteamAPI_UseBreakpadCrashHandler( char const *pchVersion, char const *pchDate, char const *pchTime, bool bFullMemoryDumps, void *pvContext, PFNPreMinidumpCallback m_pfnPreMinidumpCallback )
 {
+    LogMessage("SteamAPI_UseBreakpadCrashHandler(%s, %s, %s)", pchVersion, pchDate, pchTime);
     PRINT_DEBUG_TODO();
 }
 
 STEAMAPI_API void S_CALLTYPE SteamAPI_SetBreakpadAppID( uint32 unAppID )
 {
+    LogMessage("SteamAPI_SetBreakpadAppID(%u)", unAppID);
     PRINT_DEBUG_TODO();
 }
 
@@ -1075,6 +1192,7 @@ static void cb_add_queue_client(std::vector<char> result, int callback)
 /// you use any of the other manual dispatch functions below.
 STEAMAPI_API void S_CALLTYPE SteamAPI_ManualDispatch_Init()
 {
+    LogMessage("SteamAPI_ManualDispatch_Init");
     static std::atomic_bool manual_dispatch_called = false;
     bool not_yet = false;
     if (manual_dispatch_called.compare_exchange_weak(not_yet, true)) {
@@ -1088,6 +1206,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_ManualDispatch_Init()
 /// Perform certain periodic actions that need to be performed.
 STEAMAPI_API void S_CALLTYPE SteamAPI_ManualDispatch_RunFrame( HSteamPipe hSteamPipe )
 {
+    LogMessage("SteamAPI_ManualDispatch_RunFrame(%i)", hSteamPipe);
     PRINT_DEBUG("%i", hSteamPipe);
     Steam_Client *steam_client = get_steam_client();
     auto it = steam_client->steam_pipes.find(hSteamPipe);
@@ -1107,6 +1226,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_ManualDispatch_RunFrame( HSteamPipe hSteam
 /// (after dispatching the callback) before calling SteamAPI_ManualDispatch_GetNextCallback again.
 STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_ManualDispatch_GetNextCallback( HSteamPipe hSteamPipe, CallbackMsg_t *pCallbackMsg )
 {
+    LogMessage("SteamAPI_ManualDispatch_GetNextCallback(%i, %p)", hSteamPipe, pCallbackMsg);
     PRINT_DEBUG("%i %p", hSteamPipe, pCallbackMsg);
     Steam_Client *steam_client = get_steam_client();
     if (!steam_client->steamclient_server_inited) {
@@ -1153,6 +1273,7 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_ManualDispatch_GetNextCallback( HSte
 /// You must call this after dispatching the callback, if SteamAPI_ManualDispatch_GetNextCallback returns true.
 STEAMAPI_API void S_CALLTYPE SteamAPI_ManualDispatch_FreeLastCallback( HSteamPipe hSteamPipe )
 {
+    LogMessage("SteamAPI_ManualDispatch_FreeLastCallback(%i)", hSteamPipe);
     PRINT_DEBUG("%i", hSteamPipe);
     std::queue<struct cb_data> *q = NULL;
     Steam_Client *steam_client = get_steam_client();
@@ -1176,6 +1297,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_ManualDispatch_FreeLastCallback( HSteamPip
 /// only call this in a handler for SteamAPICallCompleted_t callback.
 STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_ManualDispatch_GetAPICallResult( HSteamPipe hSteamPipe, SteamAPICall_t hSteamAPICall, void *pCallback, int cubCallback, int iCallbackExpected, bool *pbFailed )
 {
+    LogMessage("SteamAPI_ManualDispatch_GetAPICallResult(%i, %llu, %i, %i)", hSteamPipe, hSteamAPICall, cubCallback, iCallbackExpected);
     PRINT_DEBUG("%i %llu %i %i", hSteamPipe, hSteamAPICall, cubCallback, iCallbackExpected);
     Steam_Client *steam_client = get_steam_client();
     if (!steam_client->steam_pipes.count(hSteamPipe)) {
@@ -1214,6 +1336,7 @@ HSteamPipe flat_gs_hsteampipe()
 //VR stuff
 STEAMAPI_API void *VR_Init(int *error, int type)
 {
+    LogMessage("VR_Init");
     PRINT_DEBUG_TODO();
     if (error) *error = 108; //HmdError_Init_HmdNotFound
     return NULL;
@@ -1221,29 +1344,34 @@ STEAMAPI_API void *VR_Init(int *error, int type)
 
 STEAMAPI_API void *VR_GetGenericInterface( const char *pchInterfaceVersion, int *peError )
 {
+    LogMessage("VR_GetGenericInterface(%s, %i)", pchInterfaceVersion, peError);
     PRINT_DEBUG_TODO();
     return NULL;
 }
 
 STEAMAPI_API const char *VR_GetStringForHmdError( int error )
 {
+    LogMessage("VR_GetStringForHmdError(%i)", error);
     PRINT_DEBUG_TODO();
     return "";
 }
 
 STEAMAPI_API steam_bool VR_IsHmdPresent()
 {
+    LogMessage("VR_IsHmdPresent");
     PRINT_DEBUG_TODO();
     return false;
 }
 
 STEAMAPI_API void VR_Shutdown()
 {
+    LogMessage("VR_Shutdown");
     PRINT_DEBUG_TODO();
 }
 
 STEAMAPI_API steam_bool SteamAPI_RestartApp( uint32 appid )
 {
+    LogMessage("SteamAPI_RestartApp(%i)", appid);
     PRINT_DEBUG("%u", appid);
     return SteamAPI_RestartAppIfNecessary(appid);
 }
@@ -1312,6 +1440,7 @@ SteamMasterServerUpdater
 
 STEAMCLIENT_API steam_bool Steam_BGetCallback( HSteamPipe hSteamPipe, CallbackMsg_t *pCallbackMsg )
 {
+    LogMessage("Steam_BGetCallback(%i)", hSteamPipe);
     PRINT_DEBUG("%i", hSteamPipe);
     SteamAPI_ManualDispatch_Init();
     Steam_Client *steam_client = get_steam_client();
@@ -1321,18 +1450,21 @@ STEAMCLIENT_API steam_bool Steam_BGetCallback( HSteamPipe hSteamPipe, CallbackMs
 
 STEAMCLIENT_API void Steam_FreeLastCallback( HSteamPipe hSteamPipe )
 {
+    LogMessage("Steam_FreeLastCallback(%i)", hSteamPipe);
     //PRINT_DEBUG("%i", hSteamPipe);
     SteamAPI_ManualDispatch_FreeLastCallback( hSteamPipe );
 }
 
 STEAMCLIENT_API steam_bool Steam_GetAPICallResult( HSteamPipe hSteamPipe, SteamAPICall_t hSteamAPICall, void* pCallback, int cubCallback, int iCallbackExpected, bool* pbFailed )
 {
+    LogMessage("Steam_GetAPICallResult(%i, %llu, %i, %i)", hSteamPipe, hSteamAPICall, cubCallback, iCallbackExpected);
     //PRINT_DEBUG("%i %llu %i %i", hSteamPipe, hSteamAPICall, cubCallback, iCallbackExpected);
     return SteamAPI_ManualDispatch_GetAPICallResult(hSteamPipe, hSteamAPICall, pCallback, cubCallback, iCallbackExpected, pbFailed);
 }
 
 STEAMCLIENT_API void* CreateInterface( const char *pName, int *pReturnCode )
 {
+    LogMessage("CreateInterface(%s, %p)", pName, pReturnCode);
     PRINT_DEBUG("%s %p", pName, pReturnCode);
     auto ptr = create_client_interface(pName);
     if (ptr) {
@@ -1345,45 +1477,53 @@ STEAMCLIENT_API void* CreateInterface( const char *pName, int *pReturnCode )
 
 STEAMCLIENT_API void Breakpad_SteamMiniDumpInit( uint32 a, const char *b, const char *c )
 {
+    LogMessage("Breakpad_SteamMiniDumpInit(%u, %s, %s)", a, b, c);
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API void Breakpad_SteamSendMiniDump( void *a, uint32 b )
 {
+    LogMessage("Breakpad_SteamSendMiniDump");
     PRINT_DEBUG_TODO();
     PRINT_DEBUG("  app is sending a crash dump! [XXXXXXXXXXXXXXXXXXXXXXXXXXX]");
 }
 
 STEAMCLIENT_API void Breakpad_SteamSetAppID( uint32 unAppID )
 {
+    LogMessage("Breakpad_SteamSetAppID(%u)", unAppID);
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API void Breakpad_SteamSetSteamID( uint64 ulSteamID )
 {
+    LogMessage("Breakpad_SteamSetSteamID(%llu)", ulSteamID);
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API void Breakpad_SteamWriteMiniDumpSetComment( const char *pchMsg )
 {
+    LogMessage("Breakpad_SteamWriteMiniDumpSetComment(%s)", pchMsg);
     PRINT_DEBUG("'%s'", pchMsg);
     PRINT_DEBUG("  app is writing a crash dump comment! [XXXXXXXXXXXXXXXXXXXXXXXXXXX]");
 }
 
 STEAMCLIENT_API void Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId( int a, int b )
 {
+    LogMessage("Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId(%i, %i)", a, b);
     PRINT_DEBUG("%i -- %i", a, b);
     PRINT_DEBUG("  app is writing a crash dump! [XXXXXXXXXXXXXXXXXXXXXXXXXXX]");
 }
 
 STEAMCLIENT_API steam_bool Steam_BConnected( HSteamUser hUser, HSteamPipe hSteamPipe )
 {
+    LogMessage("Steam_BConnected(%i, %i)", hUser, hSteamPipe);
     PRINT_DEBUG_ENTRY();
     return true;
 }
 
 STEAMCLIENT_API steam_bool Steam_BLoggedOn( HSteamUser hUser, HSteamPipe hSteamPipe )
 {
+    LogMessage("Steam_BLoggedOn(%i, %i)", hUser, hSteamPipe);
     PRINT_DEBUG("%i %i", hUser, hSteamPipe);
     Steam_Client *steam_client = get_steam_client();
 
@@ -1406,42 +1546,49 @@ STEAMCLIENT_API steam_bool Steam_BLoggedOn( HSteamUser hUser, HSteamPipe hSteamP
 
 STEAMCLIENT_API steam_bool Steam_BReleaseSteamPipe( HSteamPipe hSteamPipe )
 {
+    LogMessage("Steam_BReleaseSteamPipe(%i)", hSteamPipe);
     PRINT_DEBUG_TODO();
     return false;
 }
 
 STEAMCLIENT_API HSteamUser Steam_ConnectToGlobalUser( HSteamPipe hSteamPipe )
 {
+    LogMessage("Steam_ConnectToGlobalUser(%i)", hSteamPipe);
     PRINT_DEBUG_TODO();
     return 0;
 }
 
 STEAMCLIENT_API HSteamUser Steam_CreateGlobalUser( HSteamPipe *phSteamPipe )
 {
+    LogMessage("Steam_CreateGlobalUser(%i)", phSteamPipe);
     PRINT_DEBUG_TODO();
     return 0;
 }
 
 STEAMCLIENT_API HSteamUser Steam_CreateLocalUser( HSteamPipe *phSteamPipe, EAccountType eAccountType )
 {
+    LogMessage("Steam_CreateLocalUser(%i, %u)", phSteamPipe, eAccountType);
     PRINT_DEBUG_TODO();
     return 0;
 }
 
 STEAMCLIENT_API HSteamPipe Steam_CreateSteamPipe()
 {
+    LogMessage("Steam_CreateSteamPipe");
     PRINT_DEBUG_TODO();
     return 0;
 }
 
 STEAMCLIENT_API steam_bool Steam_GSBLoggedOn( void *phSteamHandle )
 {
+    LogMessage("Steam_GSBLoggedOn");
     PRINT_DEBUG_TODO();
     return false;
 }
 
 STEAMCLIENT_API steam_bool Steam_GSBSecure( void *phSteamHandle)
 {
+    LogMessage("Steam_GSBSecure");
     PRINT_DEBUG_TODO();
     return false;
 }
@@ -1450,29 +1597,34 @@ STEAMCLIENT_API steam_bool Steam_GSBSecure( void *phSteamHandle)
 STEAMCLIENT_API steam_bool Steam_GSGetSteam2GetEncryptionKeyToSendToNewClient(void* phSteamHandle)
 //STEAMCLIENT_API steam_bool Steam_GSGetSteam2GetEncryptionKeyToSendToNewClient( void *phSteamHandle, void *pvEncryptionKey, uint32 *pcbEncryptionKey, uint32 cbMaxEncryptionKey )
 {
+    LogMessage("Steam_GSGetSteam2GetEncryptionKeyToSendToNewClient");
     PRINT_DEBUG_TODO();
     return false;
 }
 
 STEAMCLIENT_API uint64 Steam_GSGetSteamID()
 {
+    LogMessage("Steam_GSGetSteamID");
     PRINT_DEBUG_TODO();
     return 0;
 }
 
 STEAMCLIENT_API void Steam_GSLogOff( void *phSteamHandle )
 {
+    LogMessage("Steam_GSLogOff");
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API void Steam_GSLogOn( void *phSteamHandle )
 {
+    LogMessage("Steam_GSLogOn");
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API steam_bool Steam_GSRemoveUserConnect(void* phSteamHandle)
 //STEAMCLIENT_API steam_bool Steam_GSRemoveUserConnect( void *phSteamHandle, uint32 unUserID )
 {
+    LogMessage("Steam_GSRemoveUserConnect");
     PRINT_DEBUG_TODO();
     return false;
 }
@@ -1480,6 +1632,7 @@ STEAMCLIENT_API steam_bool Steam_GSRemoveUserConnect(void* phSteamHandle)
 STEAMCLIENT_API steam_bool Steam_GSSendSteam2UserConnect(void* phSteamHandle)
 //STEAMCLIENT_API steam_bool Steam_GSSendSteam2UserConnect( void *phSteamHandle, uint32 unUserID, const void *pvRawKey, uint32 unKeyLen, uint32 unIPPublic, uint16 usPort, const void *pvCookie, uint32 cubCookie )
 {
+    LogMessage("Steam_GSSendSteam2UserConnect");
     PRINT_DEBUG_TODO();
     return false;
 }
@@ -1487,6 +1640,7 @@ STEAMCLIENT_API steam_bool Steam_GSSendSteam2UserConnect(void* phSteamHandle)
 STEAMCLIENT_API steam_bool Steam_GSSendSteam3UserConnect(void* phSteamHandle)
 //STEAMCLIENT_API steam_bool Steam_GSSendSteam3UserConnect( void *phSteamHandle, uint64 steamID, uint32 unIPPublic, const void *pvCookie, uint32 cubCookie )
 {
+    LogMessage("Steam_GSSendSteam3UserConnect");
     PRINT_DEBUG_TODO();
     return false;
 }
@@ -1494,6 +1648,7 @@ STEAMCLIENT_API steam_bool Steam_GSSendSteam3UserConnect(void* phSteamHandle)
 STEAMCLIENT_API steam_bool Steam_GSSendUserDisconnect(void* phSteamHandle)
 //STEAMCLIENT_API steam_bool Steam_GSSendUserDisconnect( void *phSteamHandle, uint64 ulSteamID, uint32 unUserID )
 {
+    LogMessage("Steam_GSSendUserDisconnect");
     PRINT_DEBUG_TODO();
     return false;
 }
@@ -1501,6 +1656,7 @@ STEAMCLIENT_API steam_bool Steam_GSSendUserDisconnect(void* phSteamHandle)
 STEAMCLIENT_API steam_bool Steam_GSSendUserStatusResponse()
 //STEAMCLIENT_API steam_bool Steam_GSSendUserStatusResponse( void *phSteamHandle, uint64 ulSteamID, int nSecondsConnected, int nSecondsSinceLast )
 {
+    LogMessage("Steam_GSSendUserStatusResponse");
     PRINT_DEBUG_TODO();
     return false;
 }
@@ -1509,12 +1665,14 @@ STEAMCLIENT_API steam_bool Steam_GSSendUserStatusResponse()
 STEAMCLIENT_API steam_bool Steam_GSSetServerType(void* phSteamHandle, int32 a2)
 //STEAMCLIENT_API steam_bool Steam_GSSetServerType( void *phSteamHandle, int32 nAppIdServed, uint32 unServerFlags, uint32 unGameIP, uint32 unGamePort, const char *pchGameDir, const char *pchVersion )
 {
+    LogMessage("Steam_GSSetServerType");
     PRINT_DEBUG_TODO();
     return false;
 }
 
 STEAMCLIENT_API int64 Steam_GSSetSpawnCount(void* phSteamHandle)
 {
+    LogMessage("Steam_GSSetSpawnCount");
     PRINT_DEBUG_TODO();
     return 0;
 }
@@ -1528,18 +1686,21 @@ STEAMCLIENT_API void Steam_GSSetSpawnCount( void *phSteamHandle, uint32 ucSpawn 
 STEAMCLIENT_API steam_bool Steam_GSUpdateStatus(void* phSteamHandle)
 //STEAMCLIENT_API steam_bool Steam_GSUpdateStatus( void *phSteamHandle, int cPlayers, int cPlayersMax, int cBotPlayers, const char *pchServerName, const char *pchMapName )
 {
+    LogMessage("Steam_GSUpdateStatus");
     PRINT_DEBUG_TODO();
     return false;
 }
 
 STEAMCLIENT_API void* Steam_GetGSHandle( HSteamUser hUser, HSteamPipe hSteamPipe )
 {
+    LogMessage("Steam_GetGSHandle(%i, %i)", hUser, hSteamPipe);
     PRINT_DEBUG_TODO();
     return nullptr;
 }
 
 STEAMCLIENT_API int Steam_InitiateGameConnection( HSteamUser hUser, HSteamPipe hSteamPipe, void *pBlob, int cbMaxBlob, uint64 steamID, int nGameAppID, uint32 unIPServer, uint16 usPortServer, bool bSecure )
 {
+    LogMessage("Steam_InitiateGameConnection(%i, %i, %i, %llu, %i, %u, %hu)", hUser, hSteamPipe, cbMaxBlob, steamID, nGameAppID, unIPServer, usPortServer);
     PRINT_DEBUG_TODO();
     return 0;
 }
@@ -1547,6 +1708,7 @@ STEAMCLIENT_API int Steam_InitiateGameConnection( HSteamUser hUser, HSteamPipe h
 // https://github.com/ValveSoftware/Proton/blob/962bbc4e74dde0643a6edab7c845bc628601f23f/lsteamclient/steamclient_main.c#L579-L586
 STEAMCLIENT_API steam_bool Steam_IsKnownInterface( const char *pchVersion )
 {
+    LogMessage("Steam_IsKnownInterface(%s)", pchVersion);
     PRINT_DEBUG("'%s'", pchVersion);
     
     // real client doesn't validate if the arg was null
@@ -1564,37 +1726,44 @@ STEAMCLIENT_API steam_bool Steam_IsKnownInterface( const char *pchVersion )
 
 STEAMCLIENT_API void Steam_LogOff( HSteamUser hUser, HSteamPipe hSteamPipe )
 {
+    LogMessage("Steam_LogOff(%i, %i)", hUser, hSteamPipe);
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API void Steam_LogOn( HSteamUser hUser, HSteamPipe hSteamPipe, uint64 ulSteamID )
 {
+    LogMessage("Steam_LogOn(%i, %i, %llu)", hUser, hSteamPipe, ulSteamID);
     PRINT_DEBUG_TODO();
 }
 
 // https://github.com/ValveSoftware/Proton/blob/962bbc4e74dde0643a6edab7c845bc628601f23f/lsteamclient/steamclient_main.c#L588-L594
 STEAMCLIENT_API void Steam_NotifyMissingInterface(HSteamPipe hSteamPipe, const char *pchVersion )
 {
+    LogMessage("Steam_NotifyMissingInterface(%i, %s)", hSteamPipe, pchVersion);
     PRINT_DEBUG("XXXXXXXXXXXXX '%s' %i", pchVersion, hSteamPipe);
     get_steam_client()->report_missing_impl(pchVersion, EMU_FUNC_NAME);
 }
 
 STEAMCLIENT_API void Steam_ReleaseThreadLocalMemory(bool thread_exit)
 {
+    LogMessage("Steam_ReleaseThreadLocalMemory");
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API void Steam_ReleaseUser( HSteamPipe hSteamPipe, HSteamUser hUser )
 {
+    LogMessage("Steam_ReleaseUser(%i, %i)", hSteamPipe, hUser);
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API void Steam_SetLocalIPBinding( uint32 unIP, uint16 usLocalPort )
 {
+    LogMessage("Steam_SetLocalIPBinding(%u, %hu)", unIP, usLocalPort);
     PRINT_DEBUG_TODO();
 }
 
 STEAMCLIENT_API void Steam_TerminateGameConnection( HSteamUser hUser, HSteamPipe hSteamPipe, uint32 unIPServer, uint16 usPortServer )
 {
+    LogMessage("Steam_TerminateGameConnection(%i, %i, %u, %hu)", hUser, hSteamPipe);
     PRINT_DEBUG_TODO();
 }
